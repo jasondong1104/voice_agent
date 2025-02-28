@@ -1,9 +1,11 @@
 from typing import AsyncIterable, List, Optional, Callable, Any, Dict
 from livekit.agents import llm, utils
 from livekit.agents.llm import LLMStream, ChatMessage, ChatChunk, Choice, ChoiceDelta
-from llm_agent import llm_workflow
+from llm_agent import MyMessagesState, WorkFlow
 from livekit.agents.types import APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
 import uuid
+from api_config import config, update_config
+from langgraph.graph import StateGraph
 
 class LangchainLLMStream(LLMStream):
     def __init__(self, llm: 'LangchainLLM', **kwargs) -> None:
@@ -69,6 +71,24 @@ class LangchainLLM(llm.LLM):
     def __init__(self):
         super().__init__()
         self._metrics_handlers = []
+        self._config_handlers = []  # 添加配置处理器列表
+
+    def update_config(self, new_config: dict):
+        update_config(new_config)
+        # 通知所有配置处理器
+        for handler in self._config_handlers:
+            handler(new_config)
+        # 重新初始化LLM
+        self._reinitialize_llm()
+
+    def _reinitialize_llm(self):
+        # 重新初始化LLM和工作流
+        global llm_workflow
+        llm_workflow = WorkFlow().get_workflow()
+
+    def on_config_update(self, callback: Callable[[Dict], None]):
+        """注册配置更新回调"""
+        self._config_handlers.append(callback)
 
     def on(self, event: str, callback: Callable[[Any], None] | None = None):
         if event == "metrics_collected":

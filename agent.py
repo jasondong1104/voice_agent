@@ -1,7 +1,13 @@
 import logging
 import os
+import asyncio
 from dotenv import load_dotenv
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from api_config import update_config
 from langchain_llm import LangchainLLM
+# python agent.py --server-url wss://your-livekit-server --api-key your-api-key --api-secret your-api-secret
+#todo: 1. 前端添加模型 baseurl 文本框 2....
 
 # Load environment variables from .env file
 load_dotenv(dotenv_path=".env.local")
@@ -20,10 +26,40 @@ from livekit.plugins import cartesia, openai, deepgram, silero, turn_detector
 
 logger = logging.getLogger("voice-agent")
 
+# 创建FastAPI应用
+app = FastAPI()
+llm_instance = None  # 将在entrypoint中初始化
+
+# 配置CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.post("/config")
+async def update_model_config(config: dict):
+    if llm_instance:
+        llm_instance.update_config(config)
+    return {"status": "success"}
+
+async def run_fastapi():
+    import uvicorn
+    config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
+    server = uvicorn.Server(config)
+    await server.serve()
+
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
 async def entrypoint(ctx: JobContext):
+    # 启动FastAPI服务器
+    global llm_instance
+    llm_instance = LangchainLLM()
+    asyncio.create_task(run_fastapi())
+
     initial_ctx = llm.ChatContext().append(
         role="system",
         text=(
@@ -53,7 +89,7 @@ async def entrypoint(ctx: JobContext):
     agent = VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(language="zh"),
-        llm= LangchainLLM(),  # openai.LLM(model='gpt-3.5-turbo'), # LangchainLLM(),  # 使用自定义的 LangchainLLM
+        llm=llm_instance,  # 使用全局llm实例
         tts=cartesia.TTS(language="zh",speed='normal'),
         turn_detector=turn_detector.EOUModel(),
         min_endpointing_delay=0.5,

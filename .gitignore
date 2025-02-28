@@ -4,3 +4,4 @@
 .DS_Store
 agent1.py
 langchain_plugin.py
+__pycache__/
