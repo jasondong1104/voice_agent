@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-load_dotenv('.env.local')
+# load_dotenv('.env.local')
 
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter

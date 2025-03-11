@@ -2,7 +2,6 @@
 .env
 .venv/
 .DS_Store
-agent1.py
-langchain_plugin.py
 data/*
 __pycache__/
+.vscode/

@@ -14,9 +14,9 @@ from typing import Any, Dict, List
 from langchain.schema import HumanMessage, SystemMessage, AIMessage
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.schema.runnable import RunnablePassthrough
-from api_config import config
+from backend.api_config import config
 
-from rag import rag_query
+from workflow.rag import rag_query
 
 TOOLS = [rag_query]
 
