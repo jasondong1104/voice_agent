@@ -1,22 +1,29 @@
 import asyncio
 import os
+from pprint import pprint
 from dotenv import load_dotenv
-load_dotenv()
-print(os.getenv("OPENAI_API_KEY"))
-import langchain_plugin as lc
+# print(load_dotenv('.env.local'))
+
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain.output_parsers.boolean import BooleanOutputParser
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, MessagesState, END
+from langgraph.prebuilt import ToolNode
 from typing import Any, Dict, List
 from langchain.schema import HumanMessage, SystemMessage, AIMessage
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.schema.runnable import RunnablePassthrough
 from api_config import config
 
+from rag import rag_query
+
+TOOLS = [rag_query]
+
 class MyMessagesState(MessagesState):
     records: str
+    rag_data: str
+    first_rsp: str
 
 class WorkFlow:
 
@@ -35,30 +42,57 @@ class WorkFlow:
         免费的公益活动：
         对有升学意向的初三学生提供免费的体育加试辅导和培训。"""
         self.init_agents()
+        self.node_tool = ToolNode(TOOLS)
 
     @staticmethod
     def get_llm():
         return ChatOpenAI(
             temperature=0.5,
-            model='grok-2-latest',
+            model=config.llm_model if config.llm_model else "grok-2-latest",
             api_key=config.llm_api_key if config.llm_api_key else os.getenv("OPENAI_API_KEY")
         )
-    
-
-    async def node_continue(self, ctx: MyMessagesState) -> Dict[str, Any]:
+    @staticmethod
+    def continue_or_end(ctx: MyMessagesState):
+        if ctx['messages'][-1].tool_calls:
+            print('goto tool')
+            return "tool_node"
+        else:
+            print('goto node1')
+            return 'node1'
+        
+    async def node_gate(self, ctx: MyMessagesState) -> Dict[str, Any]:
         # Convert messages to Langchain format
         messages = ctx["messages"]
         ctx['records'] = ''
         for msg in messages:
             ctx['records'] += (('user: ' if isinstance(msg, HumanMessage)  else 'assistant: ') + msg.content + '\n')
             print('record is ', ctx['records'])
-        #print('first node get messages: ', ctx['records'])
+        #print('gate node get records: ', ctx['records'])
 
-        print('first node get messages: ', messages)
+        print('gate node get messages: ', messages)
         # Use ainvoke for async operation
-        response = await self.agent_continue.ainvoke({"messages": ctx["messages"]})
-        #print(f'ctx is {ctx}, response is {response}')
-        return {'messages': [('assistant', response)], 'records': ctx['records']}
+        print('gate node start ...')
+        response = await self.agent_gate.ainvoke({"messages": ctx["records"]})
+        print('gate node generated rsp.')
+        pprint(f'gate node rsp is: {response}')
+        return {'messages': [response], 'records': ctx['records']}
+    
+    async def node_continue(self, ctx: MyMessagesState) -> Dict[str, Any]:
+        print('node-continue get ctx:\n', ctx)
+        if hasattr(ctx["messages"][-2],'tool_calls'):
+            rag_data = ctx["messages"][-1].content
+            print('rag data is:\n', rag_data)
+        else:
+            rag_data = '(无)'
+
+        # Use ainvoke for async operation
+        response = await self.agent_continue.ainvoke({"messages": ctx["messages"], 'rag_data': rag_data})
+        first_rsp = response
+        print(f'first response  content is: {first_rsp}')
+        return {'messages': [('assistant', response)], 
+                'first_rsp': first_rsp, 
+                'rag_data': rag_data
+                }
     
     
     async def node_fix(self, ctx: MyMessagesState):
@@ -75,10 +109,11 @@ class WorkFlow:
     async def node_out(self, ctx: MyMessagesState):
         rsp = await self.agent_out.ainvoke({
             'messages': ctx["records"], 
+            'rag_data': ctx["rag_data"],
             'fix': ctx["messages"][-1].content, 
-            'response': ctx["messages"][-2].content
+            'response': ctx["first_rsp"],
         })
-        #print('llm final answer: ', rsp)
+        print('llm final answer: ', rsp)
         ctx["messages"] = ctx["messages"][:-2]
         return {'messages': [('assistant', rsp)]}
 
@@ -89,21 +124,21 @@ class WorkFlow:
 
         prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", teacher_profile),
+                ("system", teacher_profile + '\n学校相关基础设施信息：{rag_data}'),
                 ("placeholder", "{messages}"),
             ]
         )
         prompt_end = ChatPromptTemplate.from_messages(
             [
-                ("system", teacher_profile + 
+                ("system", teacher_profile + '\n学校相关基础设施信息：{rag_data}'+
                 '\n请根据聊天记录和修改意见，尽量改善你准备对用户做出的回答，输出最终决定回答的内容。'+
                 "\n聊天记录：{messages}\n 修改意见：{fix}\n 之前准备做出的回答：{response}\n 改善后的回答：" ), 
             ]
         )
         prompt_gate = ChatPromptTemplate.from_messages(
             [
-                ("system", "你是一个负责招生的老师，请根据以下与用户的聊天记录，判断用户最终是否同意加入招生群."),
-                ("placeholder", "{messages}"),
+                ("system", "你是一个负责招生的老师，请根据以下与用户的聊天记录，判断回答用户最后的对话是否需要查阅关于学校基础设施的材料。如果需要请调用相关工具查询相关信息；"
+                "如果不需要，请回答:此次回答用户不涉及学校基础设施资料,可直接回答。 \n聊天记录：{messages}\n"),
             ]
         )
         prompt_fix = ChatPromptTemplate.from_messages(
@@ -113,7 +148,7 @@ class WorkFlow:
                 "\n聊天记录：{messages}\n 职业特点：{profile}\n 回答：{response}\n "),
             ]
         )
-        self.agent_gate = prompt_gate | llm.bind(temperature=0) | BooleanOutputParser()
+        self.agent_gate = prompt_gate | llm.bind(temperature=0).bind_tools(TOOLS)
         self.agent_continue = prompt | llm| StrOutputParser()
         self.agent_fix = prompt_fix | llm | StrOutputParser()
         self.agent_out = prompt_end | llm | StrOutputParser()
@@ -123,11 +158,17 @@ class WorkFlow:
         workflow = StateGraph(MyMessagesState)
 
         # Add nodes with async functions
+        workflow.add_node("node0", self.node_gate)
+        workflow.add_node('tool_node', self.node_tool)
         workflow.add_node("node1", self.node_continue)
         workflow.add_node("node2", self.node_fix)
         workflow.add_node("node3", self.node_out)
 
-        workflow.set_entry_point('node1')
+        workflow.set_entry_point('node0')
+        workflow.add_conditional_edges(
+            "node0", self.continue_or_end, {"tool_node":'tool_node', "node1":'node1'}
+            )
+        workflow.add_edge('tool_node', 'node1')
         workflow.add_edge("node1", "node2")
         workflow.add_edge("node2", "node3")
         workflow.add_edge("node3", END)
@@ -145,9 +186,10 @@ if __name__ == '__main__':
     async def test_workflow():
         msgs = {'messages': [
             #{'role': 'system', 'content': '你是一位历史学家。'}, 
-            HumanMessage(content='介绍一下川普')
+            HumanMessage(content='介绍一下你们学校的宿舍')
             ]
         }
         rst = await WorkFlow().get_workflow().ainvoke(msgs)
+        print('\n')
         print(rst)
     asyncio.run(test_workflow())

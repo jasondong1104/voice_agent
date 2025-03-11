@@ -71,7 +71,8 @@ class LangchainLLM(llm.LLM):
     def __init__(self):
         super().__init__()
         self._metrics_handlers = []
-        self._config_handlers = []  # 添加配置处理器列表
+        self._config_handlers = []
+        self._reinitialize_llm()
 
     def update_config(self, new_config: dict):
         update_config(new_config)

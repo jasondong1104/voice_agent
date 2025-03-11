@@ -4,10 +4,10 @@ import asyncio
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api_config import update_config
+from api_config import update_config, get_default_config
 from langchain_llm import LangchainLLM
 # python agent.py --server-url wss://your-livekit-server --api-key your-api-key --api-secret your-api-secret
-#todo: 1. 前端添加模型 baseurl 文本框 2....
+#todo: 1. 前端添加模型 baseurl 文本框 2.agent profile content 文本框
 
 # Load environment variables from .env file
 load_dotenv(dotenv_path=".env.local")
@@ -22,7 +22,7 @@ from livekit.agents import (
     metrics,
 )
 from livekit.agents.pipeline import VoicePipelineAgent
-from livekit.plugins import cartesia, openai, deepgram, silero, turn_detector
+from livekit.plugins import cartesia, openai, deepgram, silero, turn_detector, elevenlabs
 
 logger = logging.getLogger("voice-agent")
 
@@ -45,6 +45,10 @@ async def update_model_config(config: dict):
         llm_instance.update_config(config)
     return {"status": "success"}
 
+@app.get("/default-config")
+async def get_default_configuration():
+    return get_default_config()
+
 async def run_fastapi():
     import uvicorn
     config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
@@ -56,26 +60,16 @@ def prewarm(proc: JobProcess):
 
 async def entrypoint(ctx: JobContext):
     # 启动FastAPI服务器
+    asyncio.create_task(run_fastapi())
+    
     global llm_instance
     llm_instance = LangchainLLM()
-    asyncio.create_task(run_fastapi())
 
     initial_ctx = llm.ChatContext().append(
         role="system",
         text=(
-            """个人资料：你是一位新入职山西太原市杨帆高中的物理老师；最近几个月在负责学校的招生工作，正在与学生家长进行电话联系。
-谈话策略：在通话话开始阶段首先介绍自己。然后主动了解对方的家庭情况，孩子的升学情况。通话过程中要始终记得你的目的是为杨帆高中招生。在谈话过程中保持主动！每次对话都要注意跟通话目的和策略保持一致。
-谈话的目的是了解对方的家庭情况，特别是对方的孩子的升学情况。如果对方的家庭中有孩子准备升学进入高中阶段，就向其推荐杨帆中学，并邀请其加入群聊；对方表达意愿后可逐渐结束对话。如果对方没有准备升学的孩子，逐渐结束对话。
-约束：
-回答使用口语化的语言，并保持简洁。
-讲话的声音不要太慢，回答不要超过50个字。
-回答具体问题时精炼一些，少用感叹句。
-对于你不懂的问题，回答你自己不了解；并且邀请对方加入群聊向骨干老师咨询。
-杨帆高中资料：
-对学生的激励措施：高中期间的奖金和竞赛辅导。
-免费的公益活动：
-对有升学意向的初三学生提供免费的体育加试辅导和培训。
-免费参观学校的活动。"""
+            """个人资料：你是一位新入职山西太原市杨帆高中的物理老师；
+            最近几个月在负责学校的招生工作，正在与学生家长进行电话联系。"""
         ),
     )
 
@@ -89,8 +83,9 @@ async def entrypoint(ctx: JobContext):
     agent = VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(language="zh"),
-        llm=llm_instance,  # 使用全局llm实例
-        tts=cartesia.TTS(language="zh",speed='normal'),
+        llm=llm_instance,
+        tts=elevenlabs.TTS(language='zh',
+        ),
         turn_detector=turn_detector.EOUModel(),
         min_endpointing_delay=0.5,
         max_endpointing_delay=5.0,
